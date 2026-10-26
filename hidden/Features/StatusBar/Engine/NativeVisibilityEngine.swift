@@ -34,6 +34,8 @@ import AppKit
 final class NativeVisibilityEngine: MenuBarEngine {
     // System item identifiers to keep visible. Unknown identifiers are ignored,
     // so the range covers items a given Mac does not have (0-63 checked on 27.0).
+    // The Focus indicator is hidden under any restriction whatever is allowed
+    // (no identifier or bundle keeps it, measured on 27.0.1).
     static let systemItemsToKeep = Array(0..<64)
 
     private weak var items: MenuBarItemProvider?
@@ -161,12 +163,26 @@ final class NativeVisibilityEngine: MenuBarEngine {
     // The sections as the user arranged them. Read fresh only from an
     // unrestricted bar; while a restriction is active the cached ones stand in.
     // Superseded by any later expand or activation, like an activation is.
-    private func withLayout(_ body: @escaping (MenuBarLayout?) -> Void) {
+    private func withLayout(attempt: Int = 0, _ body: @escaping (MenuBarLayout?) -> Void) {
         if assertion != nil {
             return body(layout)
         }
         guard let arrow = items?.toggleItem,
               let boundary = itemFrame(arrow) else { return body(nil) }
+        // Right after launch the arrow has not been placed yet and reports a
+        // frame at the screen's far edge, which would classify every icon as
+        // hidden. Status items live in the trailing half of the bar, so wait.
+        let screenMidX = arrow.button?.window?.screen?.frame.midX ?? NSScreen.main?.frame.midX ?? 0
+        // Read the direction from AppKit: Constant.isUsingLTRLanguage is only set
+        // once launch finishes, which can be after the first collapse.
+        let isPlaced = NSApp.userInterfaceLayoutDirection == .leftToRight ? boundary.midX > screenMidX : boundary.midX < screenMidX
+        guard isPlaced else {
+            guard attempt < 20 else { return body(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.withLayout(attempt: attempt + 1, body)
+            }
+            return
+        }
         let alwaysHiddenFrame = alwaysHiddenEnabled ? items?.alwaysHiddenItem.flatMap(itemFrame) : nil
         let isLTR = self.isLTR()
         generation += 1

@@ -26,7 +26,10 @@ class StatusBarController: MenuBarItemProvider {
     // How hiding is achieved (separator lengths) lives in the engine; this class
     // owns the items, the UI, and when to collapse or expand.
     private lazy var menuBarEngine: MenuBarEngine = MenuBarEngineFactory.make(items: self)
-    
+
+    // Only native hiding takes the real Focus item away, so only it needs a stand-in.
+    private lazy var focusItem: FocusItemController? = menuBarEngine is NativeVisibilityEngine ? FocusItemController() : nil
+
     private let imgIconLine = NSImage(named:NSImage.Name("ic_line"))
     
     private var isCollapsed: Bool {
@@ -236,6 +239,7 @@ class StatusBarController: MenuBarItemProvider {
     // a permission), so show the bar as expanded, and restore the activation
     // policy in case the UI had already switched to collapsed.
     private func didFailToCollapseMenuBar() {
+        focusItem?.setVisible(false)
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
         }
@@ -245,6 +249,7 @@ class StatusBarController: MenuBarItemProvider {
     }
 
     private func didCollapseMenuBar() {
+        focusItem?.setVisible(true)
         if let button = btnExpandCollapse.button {
             button.image = Assets.expandImage
         }
@@ -257,6 +262,7 @@ class StatusBarController: MenuBarItemProvider {
     private func expandMenubar() {
         guard self.isCollapsed else {return}
         menuBarEngine.expand()
+        focusItem?.setVisible(false)
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
         }

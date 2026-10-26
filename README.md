@@ -16,6 +16,8 @@
 	</a>
 </p>
 
+> **Fork for macOS 27.** This fork fixes the startup hiding bug and adds a Focus item to the direct build. See [FORK.md](FORK.md) for what changed, how to build and the required permissions.
+
 ## Hidden Bar
 Hidden Bar lets you hide menu bar items to give your Mac a cleaner look.
 

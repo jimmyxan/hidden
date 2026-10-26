@@ -335,3 +335,36 @@ final class LegacyLengthEngineTests: XCTestCase {
         XCTAssertEqual(items.separatorItem.length, 20)
     }
 }
+
+// MARK: - Focus database
+
+final class FocusDatabaseTests: XCTestCase {
+    func testReadsModesAndTheLatestActiveMode() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("""
+        {"data":[{"modeConfigurations":{
+          "a":{"mode":{"name":"Work","modeIdentifier":"com.apple.focus.work","symbolImageName":"briefcase.fill"}},
+          "b":{"mode":{"name":"Fitness","modeIdentifier":"com.apple.focus.fitness","symbolImageName":"heart.fill"}},
+          "c":{"mode":{"name":"Reduce Interruptions","modeIdentifier":"com.apple.focus.reduce-interruptions","symbolImageName":"moon.fill"}}
+        }}]}
+        """.utf8).write(to: directory.appendingPathComponent("ModeConfigurations.json"))
+        try Data("""
+        {"data":[{"storeAssertionRecords":[
+          {"assertionDetails":{"assertionDetailsModeIdentifier":"com.apple.focus.work"},"assertionStartDateTimestamp":10},
+          {"assertionDetails":{"assertionDetailsModeIdentifier":"com.apple.focus.fitness"},"assertionStartDateTimestamp":20}
+        ]}]}
+        """.utf8).write(to: directory.appendingPathComponent("Assertions.json"))
+
+        let modes = try FocusItemController.readModes(from: directory)
+        XCTAssertEqual(modes.map(\.name), ["Fitness", "Reduce Interruptions", "Work"])
+        XCTAssertEqual(modes.first?.symbolName, "heart.fill")
+        XCTAssertEqual(modes[1].symbolName, "_gm", "Reduce Interruptions shows the Apple Intelligence glyph, not its legacy moon")
+        XCTAssertNotNil(NSImage(systemSymbolName: modes[1].symbolName, accessibilityDescription: nil))
+        XCTAssertEqual(try FocusItemController.readActiveModeIdentifier(from: directory), "com.apple.focus.fitness")
+
+        try Data(#"{"data":[{"storeAssertionRecords":[]}]}"#.utf8).write(to: directory.appendingPathComponent("Assertions.json"))
+        XCTAssertNil(try FocusItemController.readActiveModeIdentifier(from: directory), "no assertion means Focus is off")
+    }
+}
