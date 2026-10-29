@@ -30,6 +30,17 @@ protocol MenuBarEngine: AnyObject {
     // Display geometry changed. Re-applies the collapse to the live items when
     // collapsed, so a hot-plug does not leave a stale length behind (PR #354).
     func invalidateLayout()
+
+    // Declared here (not only in the extension) so engines can override them.
+    var mayHideSystemItems: Bool { get }
+    var hidesSystemItems: Bool { get }
+}
+
+extension MenuBarEngine {
+    // Whether the engine can take macOS's real Focus and timer items away, so the
+    // controller creates their stand-ins, and whether it does right now.
+    var mayHideSystemItems: Bool { return false }
+    var hidesSystemItems: Bool { return false }
 }
 
 enum MenuBarEngineState {

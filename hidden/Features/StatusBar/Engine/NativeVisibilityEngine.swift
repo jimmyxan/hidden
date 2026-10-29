@@ -108,7 +108,7 @@ final class NativeVisibilityEngine: MenuBarEngine {
                 self.state = .expanded
                 return completion(.unavailable)
             }
-            self.activate(allowing: layout.bundles(in: [.visible])) { [weak self] succeeded in
+            self.activate(allowing: layout.bundles(in: [.visible]), hiding: layout.bundles(in: [.hidden, .alwaysHidden])) { [weak self] succeeded in
                 guard let self = self else { return }
                 self.state = succeeded ? .collapsed : .expanded
                 if succeeded {
@@ -156,7 +156,7 @@ final class NativeVisibilityEngine: MenuBarEngine {
             guard let layout = layout else {
                 return self.releaseAssertion()
             }
-            self.activate(allowing: layout.bundles(in: [.visible, .hidden])) { _ in }
+            self.activate(allowing: layout.bundles(in: [.visible, .hidden]), hiding: layout.bundles(in: [.alwaysHidden])) { _ in }
         }
     }
 
@@ -202,12 +202,13 @@ final class NativeVisibilityEngine: MenuBarEngine {
 
     // Activates the new restriction before dropping the old one, so switching
     // between collapsed and expanded never flashes the whole bar visible.
-    private func activate(allowing bundles: [String], completion: @escaping (Bool) -> Void) {
+    private func activate(allowing bundles: [String], hiding hidden: [String], completion: @escaping (Bool) -> Void) {
         generation += 1
         let generation = self.generation
         let allowed = (ownBundleIdentifier.map { [$0] } ?? []) + bundles
         visibility.activate(allowedSystemItems: Self.systemItemsToKeep,
-                            allowedBundleIdentifiers: allowed) { [weak self] result in
+                            allowedBundleIdentifiers: allowed,
+                            hiddenBundleIdentifiers: hidden) { [weak self] result in
             guard let self = self, generation == self.generation else {
                 if case .success(let stale) = result { stale.invalidate() }
                 return
@@ -233,6 +234,10 @@ final class NativeVisibilityEngine: MenuBarEngine {
         items?.separatorItem.isVisible = false
         items?.alwaysHiddenItem?.length = visible && alwaysHiddenEnabled ? expandedLength : 0
     }
+
+    // The restriction takes Focus and the timer away whatever is allowed.
+    var mayHideSystemItems: Bool { return true }
+    var hidesSystemItems: Bool { return true }
 
     // Any arrangement works: whatever sits left of the arrow is the hidden section.
     var isArrangementValid: Bool {

@@ -34,6 +34,10 @@ class AppDelegate: NSObject, NSApplicationDelegate{
         detectLTRLang()
     }
     
+    func applicationWillTerminate(_ notification: Notification) {
+        statusBarController.willTerminate()
+    }
+
     func openPreferencesIfNeeded() {
         if Preferences.isShowPreference {
             Util.showPrefWindow()

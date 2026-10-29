@@ -71,6 +71,7 @@ private final class FakeVisibility: NativeVisibilityProviding {
 
     func activate(allowedSystemItems: [Int],
                   allowedBundleIdentifiers: [String],
+                  hiddenBundleIdentifiers: [String],
                   completion: @escaping (Result<NativeVisibilityAssertion, Error>) -> Void) {
         requests.append(Request(systemItems: allowedSystemItems, bundles: allowedBundleIdentifiers, completion: completion))
     }
@@ -366,5 +367,190 @@ final class FocusDatabaseTests: XCTestCase {
 
         try Data(#"{"data":[{"storeAssertionRecords":[]}]}"#.utf8).write(to: directory.appendingPathComponent("Assertions.json"))
         XCTAssertNil(try FocusItemController.readActiveModeIdentifier(from: directory), "no assertion means Focus is off")
+    }
+}
+
+// MARK: - Clock timers
+
+final class TimerItemTests: XCTestCase {
+    func testSoonestRunningOrPausedTimerWins() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        func timer(_ state: Int, _ fireTime: [String: Any]) -> [String: Any] {
+            return ["$MTTimer": ["MTTimerState": state, "MTTimerFireTime": fireTime]]
+        }
+        let running = timer(3, ["$MTTimerDate": ["MTTimerTimeDate": now.addingTimeInterval(1_522)]])
+        let paused = timer(2, ["$MTTimerTimeInterval": ["MTTimerTimeInterval": 300.0]])
+        let idle = timer(1, ["$MTTimerTimeInterval": ["MTTimerTimeInterval": 60.0]])
+
+        XCTAssertNil(TimerItemController.activeTimer(in: [idle], now: now), "an idle timer hides the item")
+        XCTAssertEqual(TimerItemController.activeTimer(in: [idle, running], now: now),
+                       .init(remaining: 1_522, isPaused: false))
+        XCTAssertEqual(TimerItemController.activeTimer(in: [running, paused], now: now),
+                       .init(remaining: 300, isPaused: true))
+        XCTAssertEqual(TimerItemController.format(1_522), "25:22")
+        XCTAssertEqual(TimerItemController.format(3_723), "1:02:03")
+    }
+}
+
+// MARK: - Per-app switches
+
+private final class FakeAppSwitches: AppSwitchStoring {
+    var isAvailable = true
+    var on: Set<String>
+    var writes: [[String: Bool]] = []
+    var failWrites = false
+    var grants = 0
+
+    init(on: Set<String>) {
+        self.on = on
+    }
+
+    func allowedBundles() -> Set<String>? {
+        return isAvailable ? on : nil
+    }
+
+    func setAllowed(_ changes: [String: Bool]) -> Bool {
+        guard isAvailable, !failWrites else { return false }
+        writes.append(changes)
+        for (bundle, allowed) in changes {
+            if allowed { on.insert(bundle) } else { on.remove(bundle) }
+        }
+        return true
+    }
+
+    func requestAccess() -> Bool {
+        grants += 1
+        isAvailable = true
+        return true
+    }
+}
+
+final class PerAppSwitchVisibilityTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private var switches: FakeAppSwitches!
+    private var ledger: HiddenAppsLedger!
+    private var visibility: PerAppSwitchVisibility!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: "PerAppSwitchVisibilityTests")!
+        defaults.removePersistentDomain(forName: "PerAppSwitchVisibilityTests")
+        switches = FakeAppSwitches(on: ["a", "b", "c"])
+        ledger = HiddenAppsLedger(defaults: defaults)
+        visibility = PerAppSwitchVisibility(store: switches, ledger: ledger)
+    }
+
+    private func activate(allowing: [String] = ["own"], hiding: [String]) -> Result<NativeVisibilityAssertion, Error> {
+        var result: Result<NativeVisibilityAssertion, Error>!
+        visibility.activate(allowedSystemItems: [], allowedBundleIdentifiers: allowing, hiddenBundleIdentifiers: hiding) { result = $0 }
+        return result
+    }
+
+    func testActivateSwitchesOffOnlyHiddenAppsAndReleaseRestoresThem() throws {
+        let assertion = try activate(hiding: ["a", "b"]).get()
+        XCTAssertEqual(switches.on, ["c"])
+        XCTAssertEqual(ledger.bundles, ["a", "b"])
+
+        assertion.invalidate()
+        XCTAssertEqual(switches.on, ["a", "b", "c"])
+        XCTAssertEqual(ledger.bundles, [])
+    }
+
+    func testAnAppTheUserSwitchedOffIsNeverRecordedNorRestored() throws {
+        switches.on = ["b", "c"]
+        let assertion = try activate(hiding: ["a", "b"]).get()
+        XCTAssertEqual(ledger.bundles, ["b"])
+
+        assertion.invalidate()
+        XCTAssertEqual(switches.on, ["b", "c"], "b was on when hidden and comes back; a was off before and stays off")
+    }
+
+    func testReplacingTheActivationNeverRestoresWhatTheNewOneHides() throws {
+        let old = try activate(hiding: ["a", "b"]).get()
+        let new = try activate(hiding: ["b"]).get()
+        XCTAssertEqual(switches.on, ["a", "c"], "a is back, b stays hidden")
+
+        old.invalidate()
+        XCTAssertEqual(switches.on, ["a", "c"], "the superseded handle restores nothing")
+
+        new.invalidate()
+        XCTAssertEqual(switches.on, ["a", "b", "c"])
+    }
+
+    func testFailedWriteRestoresAndFailsOpen() {
+        switches.failWrites = true
+        guard case .failure = activate(hiding: ["a"]) else { return XCTFail("expected a failure") }
+        switches.failWrites = false
+        XCTAssertTrue(visibility.restoreAll())
+        XCTAssertEqual(switches.on, ["a", "b", "c"])
+        XCTAssertEqual(ledger.bundles, [])
+    }
+
+    func testRestoreKeepsTheLedgerWhileTheListIsUnreachable() throws {
+        _ = try activate(hiding: ["a"]).get()
+        switches.isAvailable = false
+        XCTAssertFalse(visibility.restoreAll())
+        XCTAssertEqual(ledger.bundles, ["a"])
+
+        switches.isAvailable = true
+        XCTAssertTrue(visibility.restoreAll())
+        XCTAssertEqual(switches.on, ["a", "b", "c"])
+    }
+
+    func testValueElementsAreDecodedAndKeysAndAdHocLocationsAreSkipped() {
+        let value: [String: Any] = ["location": ["bundle": ["_0": "com.x"]], "isAllowed": true]
+        XCTAssertEqual(ControlCenterAppList.bundle(of: value)?.0, "com.x")
+        XCTAssertNil(ControlCenterAppList.bundle(of: ["bundle": ["_0": "com.x"]]))
+        XCTAssertNil(ControlCenterAppList.bundle(of: ["location": ["adhocBinary": ["_0": "x"]], "isAllowed": true]))
+    }
+}
+
+final class MacOS27EngineTests: XCTestCase {
+    private var items: FakeItems!
+    private var switches: FakeAppSwitches!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        items = FakeItems()
+        defaults = UserDefaults(suiteName: "MacOS27EngineTests")!
+        defaults.removePersistentDomain(forName: "MacOS27EngineTests")
+        switches = FakeAppSwitches(on: ["a"])
+    }
+
+    func testLaunchRestoresAppsAPreviousRunLeftHidden() {
+        let ledger = HiddenAppsLedger(defaults: defaults)
+        ledger.bundles = ["a"]
+        switches.on = []
+        _ = MacOS27Engine(items: items, store: switches, ledger: ledger, requestAccess: { false })
+        XCTAssertEqual(switches.on, ["a"])
+        XCTAssertEqual(ledger.bundles, [])
+    }
+
+    func testWithoutAccessItOffersOnceThenFallsBackToTheRestriction() {
+        switches.isAvailable = false
+        var offers = 0
+        let engine = MacOS27Engine(items: items, store: switches, ledger: HiddenAppsLedger(defaults: defaults),
+                                   requestAccess: { offers += 1; return false })
+        engine.collapse { _ in }
+        engine.collapse { _ in }
+        XCTAssertEqual(offers, 1)
+        XCTAssertTrue(engine.hidesSystemItems, "the fallback restriction hides Focus and the timer, so the stand-ins show")
+    }
+
+    func testWithAccessThePerAppEngineKeepsTheRealItems() {
+        let engine = MacOS27Engine(items: items, store: switches, ledger: HiddenAppsLedger(defaults: defaults),
+                                   requestAccess: { false })
+        engine.collapse { _ in }
+        XCTAssertFalse(engine.hidesSystemItems)
+        XCTAssertTrue(engine.mayHideSystemItems)
+    }
+
+    func testAGrantGivenAtTheFirstCollapseIsUsedImmediately() {
+        switches.isAvailable = false
+        let engine = MacOS27Engine(items: items, store: switches, ledger: HiddenAppsLedger(defaults: defaults),
+                                   requestAccess: { [switches] in switches!.requestAccess() })
+        engine.collapse { _ in }
+        XCTAssertFalse(engine.hidesSystemItems)
     }
 }

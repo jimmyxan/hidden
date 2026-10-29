@@ -11,11 +11,12 @@ import Foundation
 enum MenuBarEngineFactory {
     static func make(items: MenuBarItemProvider) -> MenuBarEngine {
         // macOS 27 ejects an inflated separator from the menu bar (#360). The
-        // direct build hides natively there instead. The App Store build cannot:
+        // direct build hides natively there instead: per app, so the real Focus and
+        // timer stay, with the restriction as fallback. The App Store build cannot:
         // the sandbox blocks the Accessibility reads that locate the sections.
         #if HIDDENBAR_NATIVE_VISIBILITY
         if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 {
-            return NativeVisibilityEngine(items: items)
+            return MacOS27Engine(items: items)
         }
         #endif
         return LegacyLengthEngine(items: items)

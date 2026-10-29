@@ -27,8 +27,9 @@ class StatusBarController: MenuBarItemProvider {
     // owns the items, the UI, and when to collapse or expand.
     private lazy var menuBarEngine: MenuBarEngine = MenuBarEngineFactory.make(items: self)
 
-    // Only native hiding takes the real Focus item away, so only it needs a stand-in.
-    private lazy var focusItem: FocusItemController? = menuBarEngine is NativeVisibilityEngine ? FocusItemController() : nil
+    // Only hiding by restriction takes the real Focus and timer items away, so only it needs stand-ins.
+    private lazy var focusItem: FocusItemController? = menuBarEngine.mayHideSystemItems ? FocusItemController() : nil
+    private lazy var timerItem: TimerItemController? = menuBarEngine.mayHideSystemItems ? TimerItemController() : nil
 
     private let imgIconLine = NSImage(named:NSImage.Name("ic_line"))
     
@@ -240,6 +241,7 @@ class StatusBarController: MenuBarItemProvider {
     // policy in case the UI had already switched to collapsed.
     private func didFailToCollapseMenuBar() {
         focusItem?.setVisible(false)
+        timerItem?.setVisible(false)
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
         }
@@ -249,7 +251,8 @@ class StatusBarController: MenuBarItemProvider {
     }
 
     private func didCollapseMenuBar() {
-        focusItem?.setVisible(true)
+        focusItem?.setVisible(menuBarEngine.hidesSystemItems)
+        timerItem?.setVisible(menuBarEngine.hidesSystemItems)
         if let button = btnExpandCollapse.button {
             button.image = Assets.expandImage
         }
@@ -263,6 +266,7 @@ class StatusBarController: MenuBarItemProvider {
         guard self.isCollapsed else {return}
         menuBarEngine.expand()
         focusItem?.setVisible(false)
+        timerItem?.setVisible(false)
         if let button = btnExpandCollapse.button {
             button.image = Assets.collapseImage
         }
@@ -311,6 +315,15 @@ class StatusBarController: MenuBarItemProvider {
         NotificationCenter.default.addObserver(self, selector: #selector(updateAutoHide), name: .prefsChanged, object: nil)
         menu.addItem(toggleAutoHideItem)
 
+        if menuBarEngine is MacOS27Engine {
+            let grantItem = NSMenuItem(title: "Grant Access to Control Center App List...".localized, action: #selector(grantAppListAccess), keyEquivalent: "")
+            grantItem.target = self
+            menu.addItem(grantItem)
+            let restoreItem = NSMenuItem(title: "Restore Hidden Apps".localized, action: #selector(restoreHiddenApps), keyEquivalent: "")
+            restoreItem.target = self
+            menu.addItem(restoreItem)
+        }
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit".localized, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         
@@ -335,6 +348,19 @@ class StatusBarController: MenuBarItemProvider {
         Util.showPrefWindow()
     }
     
+    @objc private func grantAppListAccess() {
+        (menuBarEngine as? MacOS27Engine)?.grantAccess()
+    }
+
+    @objc private func restoreHiddenApps() {
+        (menuBarEngine as? MacOS27Engine)?.restoreHiddenApps()
+    }
+
+    // Per-app hiding is saved by macOS and outlives this process.
+    func willTerminate() {
+        (menuBarEngine as? MacOS27Engine)?.restoreHiddenApps(askForAccess: false)
+    }
+
     @objc func toggleAutoHide() {
         Preferences.isAutoHide.toggle()
     }

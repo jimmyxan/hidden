@@ -17,9 +17,11 @@ protocol NativeVisibilityProviding: AnyObject {
     var isAvailable: Bool { get }
 
     // Keeps only these system items and apps visible. The completion runs on the
-    // main queue.
+    // main queue. `hiddenBundleIdentifiers` are the apps to hide: a backend that
+    // can only name what to keep (the restriction) ignores it.
     func activate(allowedSystemItems: [Int],
                   allowedBundleIdentifiers: [String],
+                  hiddenBundleIdentifiers: [String],
                   completion: @escaping (Result<NativeVisibilityAssertion, Error>) -> Void)
 }
 
@@ -30,6 +32,7 @@ final class NativeVisibilityBridge: NativeVisibilityProviding {
 
     func activate(allowedSystemItems: [Int],
                   allowedBundleIdentifiers: [String],
+                  hiddenBundleIdentifiers: [String],
                   completion: @escaping (Result<NativeVisibilityAssertion, Error>) -> Void) {
         HBNativeVisibilityActivate(allowedSystemItems.map { NSNumber(value: $0) },
                                    allowedBundleIdentifiers) { handle, error in
